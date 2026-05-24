@@ -64,6 +64,13 @@ resp = sb.chat(
 print(resp["message"]["content"])
 ```
 
+Or use `.generate()` for a single prompt string:
+
+```python
+resp = sb.generate(model="gpt-4", prompt="Write a haiku about routers")
+print(resp["message"]["content"])
+```
+
 ---
 
 ## Streaming
