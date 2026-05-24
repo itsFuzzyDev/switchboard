@@ -39,6 +39,14 @@ The `native/` folder is your home schema. Change it if you want a different defa
 
 ---
 
+## Install
+
+```bash
+pip install -e .
+```
+
+---
+
 ## Quick start
 
 ```python
