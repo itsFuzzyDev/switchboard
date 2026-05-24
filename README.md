@@ -75,6 +75,18 @@ for chunk in sb.chat(messages=[{"role": "user", "content": "Hi"}], stream=True):
 
 ---
 
+## Model list
+
+```python
+from switchboard import Switchboard
+
+sb = Switchboard(provider="openai", api_key="sk-...")
+
+print(sb.list()) # gets you list of most/all models, requires api key on all except OpenRouter and Ollaam
+```
+
+---
+
 ## Architecture
 
 ```
