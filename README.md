@@ -2,8 +2,6 @@
 
 A schema-agnostic LLM router. Define your input/output format once, call any provider.
 
-Built for projects that need one unified interface across many LLM backends.
-
 ---
 
 ## Supported providers
@@ -29,13 +27,15 @@ Your data (native schema)  ──▶  schemas/openai/input.py  ──▶  OpenAI
 OpenAI response            ──▶  schemas/openai/output.py ──▶  Your data (native schema)
 ```
 
-**Global schema:** Ollama (by default) — you speak Ollama in, get Ollama out, regardless of which provider you call.
+**Global schema:** Ollama by default. You speak Ollama-shaped in, get Ollama-shaped out, regardless of provider.
 
-Each **provider folder** has:
-- `input.py`: converts **native schema** → **that provider's native format**
-- `output.py`: converts **that provider's response** → **native schema**
+The `native/` folder holds your global schema. Change it if you need a different default shape.
 
-The `native/` folder is your home schema. Change it if you want a different default.
+> **Note:** The Ollama provider also maps to `native/`, so changing `native/` changes the Ollama provider's format too.
+
+Each provider folder (`schemas/<provider>/`) has:
+- `input.py`: native → provider format
+- `output.py`: provider response → native format
 
 ---
 
@@ -49,47 +49,39 @@ pip install -e .
 
 ## Quick start
 
+### `chat()` — full message list
+
 ```python
 from switchboard import Switchboard
 
 sb = Switchboard(provider="openai", api_key="sk-...")
 
-# Your schema is Ollama by default
 resp = sb.chat(
     model="gpt-4",
     messages=[{"role": "user", "content": "Hi"}]
 )
 
-# Response is Ollama-shaped
 print(resp["message"]["content"])
 ```
 
-Or use `.generate()` for a single prompt string:
+### `generate()` — single prompt string
 
 ```python
 resp = sb.generate(model="gpt-4", prompt="Write a haiku about routers")
 print(resp["message"]["content"])
 ```
 
----
-
-## Streaming
+### Streaming
 
 ```python
 for chunk in sb.chat(messages=[{"role": "user", "content": "Hi"}], stream=True):
     print(chunk["message"]["content"], end="", flush=True)
 ```
 
----
-
-## Model list
+### Model list
 
 ```python
-from switchboard import Switchboard
-
-sb = Switchboard(provider="openai", api_key="sk-...")
-
-print(sb.list()) # gets you list of most/all models, requires api key on all except OpenRouter and Ollaam
+models = sb.list()
 ```
 
 ---
@@ -114,19 +106,23 @@ schemas/
     output.py      # Gemini → native
 ```
 
-**To add a new provider:** create a folder with `input.py` + `output.py`. Auto-discovered.
-
 ---
 
 ## Adding a new provider
 
-1. Create `schemas/newprovider/input.py` with `InputSchema` class
-2. Create `schemas/newprovider/output.py` with `OutputSchema` class
-3. Done
+### OpenAI-compatible (Groq, DeepSeek, Mistral, OpenRouter, xAI, etc.)
 
-Each class has:
-- `to_provider(data, provider)`: convert your schema → provider format
-- `from_provider(raw, provider)`: convert provider response → your schema
+Add the endpoint to `_ENDPOINTS` in `switchboard/client.py` and include the provider in `_OPENAI_COMPATIBLE`. Reuses `schemas/openai/` automatically.
+
+### Custom provider
+
+1. Create `schemas/<name>/input.py` with a class ending in `InputSchema`
+2. Create `schemas/<name>/output.py` with a class ending in `OutputSchema`
+3. Auto-discovered on import
+
+Each class needs:
+- `to_provider(data, provider)` — native → provider format
+- `from_provider(raw, provider)` — provider response → native
 
 ---
 
