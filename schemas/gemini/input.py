@@ -13,6 +13,14 @@ class GeminiInputSchema(Schema):
         out = {"contents": contents}
         if system_instruction:
             out["systemInstruction"] = system_instruction
+        opts = data.get("options", {})
+        gen_config = {}
+        if opts.get("temperature") is not None: gen_config["temperature"] = opts["temperature"]
+        if opts.get("max_tokens") is not None: gen_config["maxOutputTokens"] = opts["max_tokens"]
+        if opts.get("top_p") is not None: gen_config["topP"] = opts["top_p"]
+        if opts.get("stop") is not None: gen_config["stopSequences"] = opts["stop"] if isinstance(opts["stop"], list) else [opts["stop"]]
+        if gen_config:
+            out["generationConfig"] = gen_config
         return out
 
     def from_provider(self, raw: dict, provider: str) -> dict:

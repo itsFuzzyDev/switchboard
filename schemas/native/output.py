@@ -35,6 +35,15 @@ GEMINI_TO_OLLAMA = {
     "usageMetadata.candidatesTokenCount": "eval_count",
 }
 
+OLLAMA_TO_OLLAMA = {
+    "model": "model",
+    "message.content": "message.content",
+    "message.role": "message.role",
+    "done": "done",
+    "prompt_eval_count": "prompt_eval_count",
+    "eval_count": "eval_count",
+}
+
 
 class OllamaOutputSchema(Schema):
     def to_provider(self, data: dict, provider: str) -> dict:
@@ -42,7 +51,7 @@ class OllamaOutputSchema(Schema):
 
     def from_provider(self, raw: dict, provider: str) -> dict:
         if provider == Provider.ollama:
-            return transform(raw, {"message.content": "message.content", "message.role": "message.role", "done": "done", "prompt_eval_count": "prompt_eval_count", "eval_count": "eval_count", "model": "model"})
+            return transform(raw, OLLAMA_TO_OLLAMA)
         if provider == Provider.claude:
             out = transform(raw, CLAUDE_TO_OLLAMA)
             blocks = raw.get("content", [])
