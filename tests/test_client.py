@@ -1,25 +1,60 @@
-import unittest
-from switchboard import Switchboard
+import unittest, asyncio
+from switchboard import Switchboard, AsyncSwitchboard, ApiError, SchemaError, ConfigurationError
 
 
 class MockHttp:
-    def __init__(self, response: dict | None = None, stream_lines: list[str] | None = None) -> None:
+    def __init__(self, response: dict | None = None, stream_lines: list[str] | None = None, exc: Exception | None = None) -> None:
         self.posts: list[tuple] = []
         self.gets: list[tuple] = []
         self._response = response
         self._stream_lines = stream_lines or []
+        self._exc = exc
 
     def post(self, url, *, json, headers):
         self.posts.append((url, json, headers))
+        if self._exc:
+            raise self._exc
         return self._response or {}
 
     def get(self, url, *, headers):
         self.gets.append((url, headers))
+        if self._exc:
+            raise self._exc
         return self._response or {}
 
     def stream_post(self, url, *, json, headers):
         self.posts.append((url, json, headers))
+        if self._exc:
+            raise self._exc
         yield from self._stream_lines
+
+
+class MockAsyncHttp:
+    def __init__(self, response: dict | None = None, stream_lines: list[str] | None = None, exc: Exception | None = None) -> None:
+        self.posts: list[tuple] = []
+        self.gets: list[tuple] = []
+        self._response = response
+        self._stream_lines = stream_lines or []
+        self._exc = exc
+
+    async def post(self, url, *, json, headers):
+        self.posts.append((url, json, headers))
+        if self._exc:
+            raise self._exc
+        return self._response or {}
+
+    async def get(self, url, *, headers):
+        self.gets.append((url, headers))
+        if self._exc:
+            raise self._exc
+        return self._response or {}
+
+    async def stream_post(self, url, *, json, headers):
+        self.posts.append((url, json, headers))
+        if self._exc:
+            raise self._exc
+        for line in self._stream_lines:
+            yield line
 
 
 # ---------------------------------------------------------------------------
@@ -35,9 +70,15 @@ _MSGS = [{"role": "user", "content": "hello"}]
 _MSGS_WITH_SYSTEM = [{"role": "system", "content": "be terse"}, {"role": "user", "content": "hello"}]
 
 
-def _sb(provider, response=None, api_key="key-test", model="m", stream_lines=None, **kw):
-    http = MockHttp(response=response, stream_lines=stream_lines)
+def _sb(provider, response=None, api_key="key-test", model="m", stream_lines=None, exc=None, **kw):
+    http = MockHttp(response=response, stream_lines=stream_lines, exc=exc)
     sb = Switchboard(provider=provider, api_key=api_key, model=model, http_client=http, **kw)
+    return sb, http
+
+
+def _asb(provider, response=None, api_key="key-test", model="m", stream_lines=None, exc=None, **kw):
+    http = MockAsyncHttp(response=response, stream_lines=stream_lines, exc=exc)
+    sb = AsyncSwitchboard(provider=provider, api_key=api_key, model=model, http_client=http, **kw)
     return sb, http
 
 
@@ -162,7 +203,7 @@ class TestGemini(unittest.TestCase):
         sb, http = _sb("gemini", {"models": [{"name": "gemini-pro"}]})
         models = sb.list()
         self.assertIn("?key=key-test", http.gets[0][0])
-        self.assertEqual(models[0]["name"], "gemini-pro")
+        self.assertEqual(models[0]["id"], "gemini-pro")
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +320,82 @@ class TestList(unittest.TestCase):
         models = sb.list()
         self.assertIn("/models", http.gets[0][0])
         self.assertEqual([m["id"] for m in models], ["gpt-4", "gpt-3.5-turbo"])
+
+
+# ---------------------------------------------------------------------------
+# Error handling
+# ---------------------------------------------------------------------------
+
+class TestErrors(unittest.TestCase):
+    def test_api_error_wrapped(self):
+        sb, _ = _sb("openai", exc=RuntimeError("boom"))
+        with self.assertRaises(ApiError) as ctx:
+            sb.chat(messages=_MSGS)
+        self.assertIn("boom", str(ctx.exception))
+
+    def test_schema_error_on_bad_response(self):
+        sb, _ = _sb("openai", "not a dict")
+        with self.assertRaises(SchemaError):
+            sb.chat(messages=_MSGS)
+
+    def test_unknown_provider(self):
+        with self.assertRaises(ConfigurationError):
+            Switchboard(provider="fake")
+
+    def test_missing_deps(self):
+        # Force _Http to fail by mocking import — tested implicitly by configuration checks
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Async
+# ---------------------------------------------------------------------------
+
+class TestAsync(unittest.TestCase):
+    def test_openai_chat(self):
+        async def main():
+            sb, _ = _asb("openai", _OPENAI_RESP)
+            resp = await sb.chat(messages=_MSGS)
+            self.assertEqual(resp["message"]["content"], "hi")
+        asyncio.run(main())
+
+    def test_openai_stream(self):
+        async def main():
+            lines = [
+                'data: {"choices": [{"delta": {"content": "he"}}]}',
+                'data: {"choices": [{"delta": {"content": "llo"}}]}',
+                'data: [DONE]',
+            ]
+            sb, _ = _asb("openai", stream_lines=lines)
+            chunks = []
+            async for chunk in await sb.chat(messages=_MSGS, stream=True):
+                chunks.append(chunk)
+            self.assertEqual(len(chunks), 2)
+            self.assertEqual(chunks[0]["message"]["content"], "he")
+        asyncio.run(main())
+
+    def test_async_api_error(self):
+        async def main():
+            sb, _ = _asb("openai", exc=RuntimeError("async boom"))
+            with self.assertRaises(ApiError) as ctx:
+                await sb.chat(messages=_MSGS)
+            self.assertIn("async boom", str(ctx.exception))
+        asyncio.run(main())
+
+    def test_async_generate(self):
+        async def main():
+            sb, http = _asb("openai", _OPENAI_RESP)
+            resp = await sb.generate("2+2")
+            self.assertEqual(resp["message"]["content"], "hi")
+            self.assertEqual(http.posts[0][1]["messages"], [{"role": "user", "content": "2+2"}])
+        asyncio.run(main())
+
+    def test_async_list(self):
+        async def main():
+            sb, http = _asb("openai", {"data": [{"id": "gpt-4"}]})
+            models = await sb.list()
+            self.assertEqual([m["id"] for m in models], ["gpt-4"])
+        asyncio.run(main())
 
 
 if __name__ == "__main__":

@@ -1,11 +1,8 @@
-from schemas.base import Schema, transform
+from schemas.base import OutputSchema, transform
 
-class ClaudeOutputSchema(Schema):
-    def to_provider(self, data: dict, provider: str) -> dict:
-        raise NotImplementedError("Use InputSchema")
 
+class ClaudeOutputSchema(OutputSchema):
     def from_provider(self, raw: dict, provider: str) -> dict:
-        # Claude → Ollama
         out = transform(raw, {
             "model": "model",
             "stop_reason": "stop_reason",

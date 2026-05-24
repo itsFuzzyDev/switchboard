@@ -1,8 +1,8 @@
-from schemas.base import Schema
+from schemas.base import InputSchema
 
-class GeminiInputSchema(Schema):
+
+class GeminiInputSchema(InputSchema):
     def to_provider(self, data: dict, provider: str) -> dict:
-        # Ollama → Gemini
         contents = []
         system_instruction = None
         for m in data.get("messages", []):
@@ -22,6 +22,3 @@ class GeminiInputSchema(Schema):
         if gen_config:
             out["generationConfig"] = gen_config
         return out
-
-    def from_provider(self, raw: dict, provider: str) -> dict:
-        raise NotImplementedError("Use OutputSchema")

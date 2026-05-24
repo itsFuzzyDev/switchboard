@@ -1,4 +1,4 @@
-from schemas.base import Schema, transform
+from schemas.base import InputSchema, transform
 from schemas.provider import Provider
 
 OLLAMA_TO_OPENAI = {
@@ -19,11 +19,8 @@ OLLAMA_TO_OPENAI = {
 }
 
 
-class OllamaInputSchema(Schema):
+class OllamaInputSchema(InputSchema):
     def to_provider(self, data: dict, provider: str) -> dict:
         if provider == Provider.ollama:
             return data
         return transform(data, OLLAMA_TO_OPENAI)
-
-    def from_provider(self, raw: dict, provider: str) -> dict:
-        raise NotImplementedError("Use OutputSchema")

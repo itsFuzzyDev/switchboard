@@ -18,10 +18,23 @@ class TestPathUtils(unittest.TestCase):
     def test_get_path_index(self):
         self.assertEqual(get_path({"items": [0, 1, 2]}, "items[1]"), 1)
 
+    def test_get_path_nested_index(self):
+        self.assertEqual(get_path({"items": [[0, 1], [2, 3]]}, "items[0][1]"), 1)
+
     def test_set_path(self):
         d = {}
         set_path(d, "a.b.c", 1)
         self.assertEqual(d, {"a": {"b": {"c": 1}}})
+
+    def test_set_path_list(self):
+        d = {"items": []}
+        set_path(d, "items[0]", "x")
+        self.assertEqual(d, {"items": ["x"]})
+
+    def test_set_path_mixed_raises(self):
+        d = {"a": {}}
+        with self.assertRaises(TypeError):
+            set_path(d, "a[0].b", 1)
 
 
 class TestTransform(unittest.TestCase):
@@ -29,6 +42,16 @@ class TestTransform(unittest.TestCase):
         mapping = {"a": "x", "b": "y"}
         result = transform({"a": 1, "b": 2, "c": 3}, mapping)
         self.assertEqual(result, {"x": 1, "y": 2, "extra": {"c": 3}})
+
+    def test_nested_mapping_does_not_consume_parent(self):
+        mapping = {"a.b": "x"}
+        result = transform({"a": {"b": 1, "c": 2}}, mapping)
+        self.assertEqual(result, {"x": 1, "extra": {"a": {"b": 1, "c": 2}}})
+
+    def test_exact_top_level_consumed(self):
+        mapping = {"a": "x"}
+        result = transform({"a": 1, "b": 2}, mapping)
+        self.assertEqual(result, {"x": 1, "extra": {"b": 2}})
 
 
 class TestOllamaPassthrough(unittest.TestCase):

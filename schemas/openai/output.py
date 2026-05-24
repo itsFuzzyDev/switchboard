@@ -1,4 +1,4 @@
-from schemas.base import Schema, transform
+from schemas.base import OutputSchema, transform
 
 _STREAM = {
     "model": "model",
@@ -21,10 +21,7 @@ _FULL = {
 }
 
 
-class OpenAIOutputSchema(Schema):
-    def to_provider(self, data: dict, provider: str) -> dict:
-        raise NotImplementedError("Use InputSchema")
-
+class OpenAIOutputSchema(OutputSchema):
     def from_provider(self, raw: dict, provider: str) -> dict:
         if raw.get("choices") and raw["choices"][0].get("delta"):
             return transform(raw, _STREAM)

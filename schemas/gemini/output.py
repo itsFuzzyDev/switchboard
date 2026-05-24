@@ -1,11 +1,8 @@
-from schemas.base import Schema, transform
+from schemas.base import OutputSchema, transform
 
-class GeminiOutputSchema(Schema):
-    def to_provider(self, data: dict, provider: str) -> dict:
-        raise NotImplementedError("Use InputSchema")
 
+class GeminiOutputSchema(OutputSchema):
     def from_provider(self, raw: dict, provider: str) -> dict:
-        # Gemini → Ollama
         out = transform(raw, {
             "model": "model",
             "usageMetadata.promptTokenCount": "prompt_eval_count",

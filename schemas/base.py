@@ -30,7 +30,8 @@ def get_path(data: dict, path: str) -> Any:
         if isinstance(val, list):
             if not part.isdigit():
                 return None
-            val = val[int(part)] if int(part) < len(val) else None
+            idx = int(part)
+            val = val[idx] if idx < len(val) else None
         elif isinstance(val, dict):
             val = val.get(part)
         else:
@@ -43,6 +44,8 @@ def set_path(data: dict, path: str, value: Any) -> None:
     node = data
     for part in parts[:-1]:
         if part.isdigit():
+            if not isinstance(node, list):
+                raise TypeError(f"Cannot index into {type(node).__name__} with path part {part!r}")
             idx = int(part)
             while len(node) <= idx:
                 node.append({})
@@ -54,6 +57,8 @@ def set_path(data: dict, path: str, value: Any) -> None:
 
     last = parts[-1]
     if last.isdigit():
+        if not isinstance(node, list):
+            raise TypeError(f"Cannot index into {type(node).__name__} with path part {last!r}")
         idx = int(last)
         while len(node) <= idx:
             node.append(None)
@@ -70,15 +75,20 @@ def transform(raw: dict, mapping: dict[str, str]) -> dict:
         val = get_path(raw, src)
         if val is not None:
             set_path(out, tgt, val)
-            consumed.add(src.split(".")[0].split("[")[0])
+            # Only consume exact top-level keys
+            if "." not in src and "[" not in src:
+                consumed.add(src)
     extra = {k: v for k, v in raw.items() if k not in consumed}
     if extra:
         out["extra"] = extra
     return out
 
 
-class Schema(ABC):
+class InputSchema(ABC):
     @abstractmethod
     def to_provider(self, data: dict, provider: str) -> dict: ...
+
+
+class OutputSchema(ABC):
     @abstractmethod
     def from_provider(self, raw: dict, provider: str) -> dict: ...

@@ -1,8 +1,8 @@
-from schemas.base import Schema
+from schemas.base import InputSchema
 
-class ClaudeInputSchema(Schema):
+
+class ClaudeInputSchema(InputSchema):
     def to_provider(self, data: dict, provider: str) -> dict:
-        # Ollama → Claude
         msgs = []
         system = None
         for m in data.get("messages", []):
@@ -17,6 +17,3 @@ class ClaudeInputSchema(Schema):
         if effort:
             out["thinking"] = {"type": "enabled", "budget_tokens": 16000 if effort in ("high", "max") else 4000}
         return out
-
-    def from_provider(self, raw: dict, provider: str) -> dict:
-        raise NotImplementedError("Use OutputSchema")

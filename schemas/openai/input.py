@@ -1,8 +1,8 @@
-from schemas.base import Schema
+from schemas.base import InputSchema
 
-class OpenAIInputSchema(Schema):
+
+class OpenAIInputSchema(InputSchema):
     def to_provider(self, data: dict, provider: str) -> dict:
-        # Ollama → OpenAI
         out = {"model": data.get("model"), "messages": data.get("messages", []), "stream": data.get("stream", False)}
         opts = data.get("options", {})
         if opts.get("temperature") is not None: out["temperature"] = opts["temperature"]
@@ -17,6 +17,3 @@ class OpenAIInputSchema(Schema):
         if data.get("tools"): out["tools"] = data["tools"]
         if data.get("tool_choice"): out["tool_choice"] = data["tool_choice"]
         return out
-
-    def from_provider(self, raw: dict, provider: str) -> dict:
-        raise NotImplementedError("Use OutputSchema")
