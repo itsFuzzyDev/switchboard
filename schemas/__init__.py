@@ -1,11 +1,4 @@
-from schemas.input import OllamaMessage, OllamaOptions, OllamaRequest, Provider
-from schemas.output import OllamaResponse, OllamaStreamChunk
+from schemas.provider import Provider
+from schemas.base import Schema, transform, get_path, set_path
 
-__all__ = [
-    "OllamaMessage",
-    "OllamaOptions",
-    "OllamaRequest",
-    "Provider",
-    "OllamaResponse",
-    "OllamaStreamChunk",
-]
+__all__ = ["Provider", "Schema", "transform", "get_path", "set_path"]
