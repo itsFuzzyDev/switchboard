@@ -5,8 +5,8 @@ _STREAM = {
     "choices[0].delta.content": "message.content",
     "choices[0].delta.role": "message.role",
     "choices[0].delta.tool_calls": "message.tool_calls",
-    "choices[0].finish_reason": "stop_reason",
-    "id": "id",
+    "choices[0].finish_reason": "done_reason",
+    "id": "extra.id",
 }
 
 _FULL = {
@@ -14,10 +14,13 @@ _FULL = {
     "choices[0].message.content": "message.content",
     "choices[0].message.role": "message.role",
     "choices[0].message.tool_calls": "message.tool_calls",
-    "choices[0].finish_reason": "stop_reason",
+    "choices[0].finish_reason": "done_reason",
     "usage.prompt_tokens": "prompt_eval_count",
     "usage.completion_tokens": "eval_count",
-    "id": "id",
+    "id": "extra.id",
+    "created": "extra.created",
+    "object": "extra.object",
+    "system_fingerprint": "extra.system_fingerprint",
 }
 
 

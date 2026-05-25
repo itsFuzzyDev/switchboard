@@ -3,6 +3,26 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 
+class SwitchboardError(Exception):
+    """Base exception for all Switchboard errors."""
+
+
+class ApiError(SwitchboardError):
+    """Raised when the provider API returns an error response."""
+    def __init__(self, message: str, status_code: int | None = None, response_body: dict | str | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.response_body = response_body
+
+
+class SchemaError(SwitchboardError):
+    """Raised when schema transformation fails."""
+
+
+class ConfigurationError(SwitchboardError):
+    """Raised when the client is misconfigured."""
+
+
 def _parse_path(path: str) -> list[str]:
     parts, current = [], ""
     for c in path:

@@ -1,28 +1,13 @@
 from __future__ import annotations
-import json, importlib
+import json, time, asyncio
 from typing import Any, Iterator, AsyncIterator
 
-from schemas import Provider, InputSchema, OutputSchema
+from schemas import Provider, ConfigurationError, ApiError, SchemaError, load as load_schema
+from schemas.types import NativeResponse
 
-
-class SwitchboardError(Exception):
-    """Base exception for all Switchboard errors."""
-
-
-class ApiError(SwitchboardError):
-    """Raised when the provider API returns an error response."""
-    def __init__(self, message: str, status_code: int | None = None, response_body: dict | str | None = None) -> None:
-        super().__init__(message)
-        self.status_code = status_code
-        self.response_body = response_body
-
-
-class SchemaError(SwitchboardError):
-    """Raised when schema transformation fails."""
-
-
-class ConfigurationError(SwitchboardError):
-    """Raised when the client is misconfigured."""
+_RETRYABLE_STATUSES = {None, 429, 502, 503, 504}
+_MAX_RETRIES = 5
+_RETRY_DELAY = 3
 
 
 _ENDPOINTS = {
@@ -68,34 +53,11 @@ def _schema_name(provider: Provider) -> str:
     return provider.value
 
 
-def _load_schema(provider: Provider) -> tuple[InputSchema, OutputSchema]:
-    name = _schema_name(provider)
-    try:
-        input_mod = importlib.import_module(f"schemas.{name}.input")
-        output_mod = importlib.import_module(f"schemas.{name}.output")
-    except ImportError as exc:
-        raise SchemaError(f"Schema module for provider '{provider.value}' not found") from exc
-
-    def _find(mod: Any, suffix: str) -> type | None:
-        for attr in dir(mod):
-            if attr.endswith(suffix) and not attr.startswith("_"):
-                obj = getattr(mod, attr)
-                if isinstance(obj, type) and obj.__module__ == mod.__name__:
-                    return obj
-        return None
-
-    in_cls = _find(input_mod, "InputSchema")
-    out_cls = _find(output_mod, "OutputSchema")
-
-    if not in_cls or not out_cls:
-        raise SchemaError(f"Schema classes for provider '{provider.value}' not found in schemas.{name}")
-    return in_cls(), out_cls()
-
-
 class _Http:
-    def __init__(self) -> None:
+    def __init__(self, retry_delay: float = _RETRY_DELAY) -> None:
         self._client: Any = None
         self._mod: str = ""
+        self._retry_delay = retry_delay
         try:
             import httpx
             self._client = httpx.Client(timeout=120)
@@ -107,6 +69,18 @@ class _Http:
                 self._mod = "requests"
             except ImportError as _requests_err:
                 raise ConfigurationError("Switchboard needs httpx or requests installed") from _requests_err
+
+    def _retry(self, func, *args, **kwargs) -> Any:
+        last_exc = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                return func(*args, **kwargs)
+            except ApiError as exc:
+                last_exc = exc
+                if attempt == _MAX_RETRIES or exc.status_code not in _RETRYABLE_STATUSES:
+                    raise
+                time.sleep(self._retry_delay)
+        raise last_exc
 
     def _call(self, method: str, url: str, *, json: dict | None = None, headers: dict) -> dict:
         try:
@@ -127,12 +101,12 @@ class _Http:
             raise ApiError(str(exc), status_code=status, response_body=body) from exc
 
     def post(self, url: str, *, json: dict, headers: dict) -> dict:
-        return self._call("POST", url, json=json, headers=headers)
+        return self._retry(self._call, "POST", url, json=json, headers=headers)
 
     def get(self, url: str, *, headers: dict) -> dict:
-        return self._call("GET", url, headers=headers)
+        return self._retry(self._call, "GET", url, headers=headers)
 
-    def stream_post(self, url: str, *, json: dict, headers: dict) -> Iterator[str]:
+    def _stream_call(self, url: str, *, json: dict, headers: dict) -> Iterator[str]:
         try:
             if self._mod == "httpx":
                 with self._client.stream("POST", url, json=json, headers=headers) as r:
@@ -154,14 +128,40 @@ class _Http:
                     body = exc.response.text
             raise ApiError(str(exc), status_code=status, response_body=body) from exc
 
+    def stream_post(self, url: str, *, json: dict, headers: dict) -> Iterator[str]:
+        last_exc = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                yield from self._stream_call(url, json=json, headers=headers)
+                return
+            except ApiError as exc:
+                last_exc = exc
+                if attempt == _MAX_RETRIES or exc.status_code not in _RETRYABLE_STATUSES:
+                    raise
+                time.sleep(self._retry_delay)
+        raise last_exc
+
 
 class _AsyncHttp:
-    def __init__(self) -> None:
+    def __init__(self, retry_delay: float = _RETRY_DELAY) -> None:
+        self._retry_delay = retry_delay
         try:
             import httpx
             self._client = httpx.AsyncClient(timeout=120)
         except ImportError as _httpx_err:
             raise ConfigurationError("AsyncSwitchboard requires httpx") from _httpx_err
+
+    async def _retry(self, coro_factory) -> Any:
+        last_exc = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                return await coro_factory()
+            except ApiError as exc:
+                last_exc = exc
+                if attempt == _MAX_RETRIES or exc.status_code not in _RETRYABLE_STATUSES:
+                    raise
+                await asyncio.sleep(self._retry_delay)
+        raise last_exc
 
     async def _call(self, method: str, url: str, *, json: dict | None = None, headers: dict) -> dict:
         try:
@@ -179,12 +179,12 @@ class _AsyncHttp:
             raise ApiError(str(exc), status_code=status, response_body=body) from exc
 
     async def post(self, url: str, *, json: dict, headers: dict) -> dict:
-        return await self._call("POST", url, json=json, headers=headers)
+        return await self._retry(lambda: self._call("POST", url, json=json, headers=headers))
 
     async def get(self, url: str, *, headers: dict) -> dict:
-        return await self._call("GET", url, headers=headers)
+        return await self._retry(lambda: self._call("GET", url, headers=headers))
 
-    async def stream_post(self, url: str, *, json: dict, headers: dict) -> AsyncIterator[str]:
+    async def _stream_call(self, url: str, *, json: dict, headers: dict) -> AsyncIterator[str]:
         try:
             async with self._client.stream("POST", url, json=json, headers=headers) as r:
                 r.raise_for_status()
@@ -199,6 +199,20 @@ class _AsyncHttp:
                 except Exception:
                     body = exc.response.text
             raise ApiError(str(exc), status_code=status, response_body=body) from exc
+
+    async def stream_post(self, url: str, *, json: dict, headers: dict) -> AsyncIterator[str]:
+        last_exc = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                async for line in self._stream_call(url, json=json, headers=headers):
+                    yield line
+                return
+            except ApiError as exc:
+                last_exc = exc
+                if attempt == _MAX_RETRIES or exc.status_code not in _RETRYABLE_STATUSES:
+                    raise
+                await asyncio.sleep(self._retry_delay)
+        raise last_exc
 
 
 class _BaseSwitchboard:
@@ -218,7 +232,7 @@ class _BaseSwitchboard:
         self.base_url = base_url or _ENDPOINTS.get(self.provider, "")
         if not self.base_url:
             raise ConfigurationError(f"No endpoint configured for provider '{self.provider.value}'")
-        self.input_schema, self.output_schema = _load_schema(self.provider)
+        self.input_schema, self.output_schema = load_schema(_schema_name(self.provider))
 
     def _url(self, model: str) -> str:
         return _chat_url(self.provider, self.base_url, model or self.model or "")
@@ -246,13 +260,17 @@ class _BaseSwitchboard:
         tools: list[dict] | None = None,
         **kwargs,
     ) -> dict:
+        model = kwargs.pop("model", None) or self.model
+        if not model:
+            raise ConfigurationError("model is required")
+
         opts = dict(options or {})
         if reasoning_effort:
             opts["reasoning_effort"] = reasoning_effort
         elif thinking:
             opts["reasoning_effort"] = "high"
 
-        req = {"model": self.model or "default", "messages": messages, "stream": stream}
+        req = {"model": model, "messages": messages, "stream": stream}
         if opts:
             req["options"] = opts
         if tools:
@@ -298,7 +316,7 @@ class Switchboard(_BaseSwitchboard):
         stream: bool = False,
         tools: list[dict] | None = None,
         **kwargs,
-    ) -> dict | Iterator[dict]:
+    ) -> NativeResponse | Iterator[NativeResponse]:
         provider_req = self._build_request(
             messages,
             options=options,
@@ -310,7 +328,7 @@ class Switchboard(_BaseSwitchboard):
         )
         return self._stream(provider_req) if stream else self._send(provider_req)
 
-    def _send(self, provider_req: dict) -> dict:
+    def _send(self, provider_req: dict) -> NativeResponse:
         url = self._url_with_key(provider_req.get("model", self.model or ""))
         try:
             raw = self._http.post(url, json=provider_req, headers=self._headers())
@@ -323,7 +341,7 @@ class Switchboard(_BaseSwitchboard):
         except Exception as exc:
             raise SchemaError(f"Failed to transform provider response: {exc}") from exc
 
-    def _stream(self, provider_req: dict) -> Iterator[dict]:
+    def _stream(self, provider_req: dict) -> Iterator[NativeResponse]:
         is_sse = self.provider != Provider.ollama
         url = self._url_with_key(provider_req.get("model", self.model or ""))
         try:
@@ -340,7 +358,7 @@ class Switchboard(_BaseSwitchboard):
                 raise
             raise ApiError(str(exc)) from exc
 
-    def generate(self, prompt: str, **kwargs) -> dict:
+    def generate(self, prompt: str, **kwargs) -> NativeResponse:
         return self.chat([{"role": "user", "content": prompt}], **kwargs)
 
     def list(self) -> list[dict]:
@@ -383,7 +401,7 @@ class AsyncSwitchboard(_BaseSwitchboard):
         stream: bool = False,
         tools: list[dict] | None = None,
         **kwargs,
-    ) -> dict | AsyncIterator[dict]:
+    ) -> NativeResponse | AsyncIterator[NativeResponse]:
         provider_req = self._build_request(
             messages,
             options=options,
@@ -397,7 +415,7 @@ class AsyncSwitchboard(_BaseSwitchboard):
             return self._stream(provider_req)
         return await self._send(provider_req)
 
-    async def _send(self, provider_req: dict) -> dict:
+    async def _send(self, provider_req: dict) -> NativeResponse:
         url = self._url_with_key(provider_req.get("model", self.model or ""))
         try:
             raw = await self._http.post(url, json=provider_req, headers=self._headers())
@@ -410,7 +428,7 @@ class AsyncSwitchboard(_BaseSwitchboard):
         except Exception as exc:
             raise SchemaError(f"Failed to transform provider response: {exc}") from exc
 
-    async def _stream(self, provider_req: dict) -> AsyncIterator[dict]:
+    async def _stream(self, provider_req: dict) -> AsyncIterator[NativeResponse]:
         is_sse = self.provider != Provider.ollama
         url = self._url_with_key(provider_req.get("model", self.model or ""))
         try:
@@ -427,7 +445,7 @@ class AsyncSwitchboard(_BaseSwitchboard):
                 raise
             raise ApiError(str(exc)) from exc
 
-    async def generate(self, prompt: str, **kwargs) -> dict:
+    async def generate(self, prompt: str, **kwargs) -> NativeResponse:
         return await self.chat([{"role": "user", "content": prompt}], **kwargs)
 
     async def list(self) -> list[dict]:

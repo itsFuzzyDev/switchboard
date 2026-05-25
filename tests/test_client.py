@@ -1,5 +1,6 @@
 import unittest, asyncio
 from switchboard import Switchboard, AsyncSwitchboard, ApiError, SchemaError, ConfigurationError
+from switchboard.client import _Http, _AsyncHttp, _RETRYABLE_STATUSES
 
 
 class MockHttp:
@@ -159,7 +160,7 @@ class TestClaude(unittest.TestCase):
         sb, _ = _sb("claude", raw)
         resp = sb.chat(messages=_MSGS)
         self.assertEqual(resp["message"]["content"], "answer")
-        self.assertEqual(resp["reasoning_content"], "step1")
+        self.assertEqual(resp["message"]["thinking"], "step1")
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +225,7 @@ class TestOllama(unittest.TestCase):
         sb, _ = _sb("ollama", _OLLAMA_RESP, api_key=None)
         resp = sb.chat(messages=_MSGS)
         self.assertEqual(resp["message"]["content"], "hi")
+        self.assertEqual(resp["done"], True)
         self.assertEqual(resp["prompt_eval_count"], 5)
         self.assertEqual(resp["eval_count"], 2)
 
@@ -240,7 +242,9 @@ class TestOllama(unittest.TestCase):
         chunks = list(sb.chat(messages=_MSGS, stream=True))
         self.assertEqual(len(chunks), 2)
         self.assertEqual(chunks[0]["message"]["content"], "he")
+        self.assertFalse(chunks[0]["done"])
         self.assertEqual(chunks[1]["message"]["content"], "llo")
+        self.assertTrue(chunks[1]["done"])
 
 
 # ---------------------------------------------------------------------------
@@ -342,9 +346,72 @@ class TestErrors(unittest.TestCase):
         with self.assertRaises(ConfigurationError):
             Switchboard(provider="fake")
 
+    def test_missing_model(self):
+        with self.assertRaises(ConfigurationError):
+            Switchboard(provider="openai", api_key="k").chat(messages=_MSGS)
+
+    def test_missing_model_generate(self):
+        with self.assertRaises(ConfigurationError):
+            Switchboard(provider="openai", api_key="k").generate("hi")
+
+    def test_kwarg_model_overrides(self):
+        sb, http = _sb("openai", _OPENAI_RESP, model="m1")
+        sb.chat(messages=_MSGS, model="m2")
+        self.assertEqual(http.posts[0][1]["model"], "m2")
+
     def test_missing_deps(self):
         # Force _Http to fail by mocking import — tested implicitly by configuration checks
         pass
+
+
+# ---------------------------------------------------------------------------
+# Retries
+# ---------------------------------------------------------------------------
+
+class TestRetries(unittest.TestCase):
+    def test_retry_on_429(self):
+        fails = [ApiError("rate limited", status_code=429)] * 3
+        http = _Http(retry_delay=0)
+        call_count = 0
+        def flaky(*args, **kwargs):
+            nonlocal call_count
+            if call_count < len(fails):
+                exc = fails[call_count]
+                call_count += 1
+                raise exc
+            return {"ok": True}
+        result = http._retry(flaky)
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(call_count, 3)
+
+    def test_retry_exhausted_raises(self):
+        http = _Http(retry_delay=0)
+        def always_fail():
+            raise ApiError("down", status_code=503)
+        with self.assertRaises(ApiError) as ctx:
+            http._retry(always_fail)
+        self.assertEqual(ctx.exception.status_code, 503)
+
+    def test_no_retry_on_400(self):
+        http = _Http(retry_delay=0)
+        def bad_request():
+            raise ApiError("bad", status_code=400)
+        with self.assertRaises(ApiError) as ctx:
+            http._retry(bad_request)
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_retry_on_connection_error(self):
+        http = _Http(retry_delay=0)
+        call_count = 0
+        def flaky(*args, **kwargs):
+            nonlocal call_count
+            if call_count == 0:
+                call_count += 1
+                raise ApiError("conn", status_code=None)
+            return {"ok": True}
+        result = http._retry(flaky)
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(call_count, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +462,33 @@ class TestAsync(unittest.TestCase):
             sb, http = _asb("openai", {"data": [{"id": "gpt-4"}]})
             models = await sb.list()
             self.assertEqual([m["id"] for m in models], ["gpt-4"])
+        asyncio.run(main())
+
+    def test_async_retry_on_429(self):
+        async def main():
+            fails = [ApiError("rate limited", status_code=429)] * 3
+            http = _AsyncHttp(retry_delay=0)
+            call_count = 0
+            async def flaky():
+                nonlocal call_count
+                if call_count < len(fails):
+                    exc = fails[call_count]
+                    call_count += 1
+                    raise exc
+                return {"ok": True}
+            result = await http._retry(flaky)
+            self.assertEqual(result, {"ok": True})
+            self.assertEqual(call_count, 3)
+        asyncio.run(main())
+
+    def test_async_no_retry_on_400(self):
+        async def main():
+            http = _AsyncHttp(retry_delay=0)
+            async def bad_request():
+                raise ApiError("bad", status_code=400)
+            with self.assertRaises(ApiError) as ctx:
+                await http._retry(bad_request)
+            self.assertEqual(ctx.exception.status_code, 400)
         asyncio.run(main())
 
 

@@ -66,6 +66,7 @@ class TestOllamaPassthrough(unittest.TestCase):
         raw = {"model": "llama3", "message": {"role": "assistant", "content": "hi"}, "done": True}
         result = schema.from_provider(raw, Provider.ollama)
         self.assertEqual(result["message"]["content"], "hi")
+        self.assertEqual(result["done"], True)
 
 
 class TestOpenAIConversion(unittest.TestCase):
